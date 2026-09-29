@@ -1,0 +1,79 @@
+/**
+ * What this file does: centralizes role-to-capability mapping for the app.
+ * What calls it: withRole, services, and route handlers that need explicit checks.
+ * What it calls: only local helpers.
+ * Junior trap: scattering role string comparisons across UI and handlers.
+ */
+import { Role } from "@prisma/client";
+
+export type Capability =
+  | "ticket:read:any"
+  | "ticket:read:own"
+  | "ticket:create"
+  | "ticket:update:any"
+  | "ticket:update:own"
+  | "ticket:assign"
+  | "ticket:comment:any"
+  | "ticket:comment:own"
+  | "rule:write"
+  | "sla:write"
+  | "audit:read";
+
+const roleCapabilities: Record<Role, Capability[]> = {
+  ADMIN: [
+    "ticket:read:any",
+    "ticket:create",
+    "ticket:update:any",
+    "ticket:assign",
+    "ticket:comment:any",
+    "rule:write",
+    "sla:write",
+    "audit:read"
+  ],
+  MANAGER: [
+    "ticket:read:any",
+    "ticket:create",
+    "ticket:update:any",
+    "ticket:assign",
+    "ticket:comment:any",
+    "rule:write",
+    "sla:write",
+    "audit:read"
+  ],
+  AGENT: [
+    "ticket:read:any",
+    "ticket:create",
+    "ticket:update:any",
+    "ticket:assign",
+    "ticket:comment:any"
+  ],
+  CUSTOMER: ["ticket:read:own", "ticket:create", "ticket:update:own", "ticket:comment:own"]
+};
+
+export type AuthUser = {
+  id: string;
+  role: Role;
+  supportGroupId: string | null;
+  email: string;
+  displayName: string;
+};
+
+export function hasCapability(user: AuthUser, capability: Capability) {
+  if (!Object.prototype.hasOwnProperty.call(roleCapabilities, user.role)) {
+    return false;
+  }
+  const capabilities = roleCapabilities[user.role];
+  return Array.isArray(capabilities) && capabilities.includes(capability);
+}
+
+export function mayReadTicket(user: AuthUser, ownerId: string, ticketGroupId: string) {
+  if (user.role === Role.ADMIN) {
+    return true;
+  }
+
+  if ((user.role === Role.MANAGER || user.role === Role.AGENT) && user.supportGroupId) {
+    return user.supportGroupId === ticketGroupId;
+  }
+
+  return user.role === Role.CUSTOMER && user.id === ownerId && user.supportGroupId === ticketGroupId;
+}

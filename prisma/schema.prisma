@@ -1,0 +1,194 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  AGENT
+  CUSTOMER
+}
+
+enum TicketPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum TicketStatus {
+  NEW
+  OPEN
+  PENDING
+  RESOLVED
+  CLOSED
+}
+
+enum RuleAction {
+  ASSIGN_GROUP
+  ASSIGN_USER
+  ESCALATE_GROUP
+}
+
+model User {
+  id               String    @id @default(cuid())
+  email            String    @unique
+  displayName      String
+  passwordHash     String
+  role             Role
+  supportGroupId   String?
+  supportGroup     SupportGroup? @relation(fields: [supportGroupId], references: [id])
+  createdTickets   Ticket[]  @relation("CreatedTickets")
+  assignedTickets  Ticket[]   @relation("AssignedTickets")
+  assignmentTargetRules AssignmentRule[] @relation("AssignmentTargetUser")
+  escalationTargetRules EscalationRule[] @relation("EscalationTargetUser")
+  comments         TicketComment[]
+  auditLogs        AuditLog[]
+  sessions         Session[]
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+}
+
+model SupportGroup {
+  id                 String    @id @default(cuid())
+  name               String    @unique
+  defaultSlaPolicyId  String?   @unique
+  defaultSlaPolicy    SlaPolicy? @relation("DefaultSlaPolicy", fields: [defaultSlaPolicyId], references: [id])
+  users              User[]
+  tickets            Ticket[]
+  assignmentRules    AssignmentRule[] @relation("AssignmentSourceGroup")
+  assignmentTargetRules AssignmentRule[] @relation("AssignmentTargetGroup")
+  slaPolicies        SlaPolicy[] @relation("GroupPolicies")
+  escalationRules    EscalationRule[] @relation("EscalationSourceGroup")
+  escalationTargetRules EscalationRule[] @relation("EscalationTargetGroup")
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+}
+
+model Ticket {
+  id                   String       @id @default(cuid())
+  number               Int          @unique @default(autoincrement())
+  subject              String
+  description          String
+  category             String
+  priority             TicketPriority @default(NORMAL)
+  status               TicketStatus   @default(NEW)
+  requesterName        String
+  requesterEmail       String
+  createdById          String
+  createdBy            User         @relation("CreatedTickets", fields: [createdById], references: [id])
+  supportGroupId       String
+  supportGroup         SupportGroup @relation(fields: [supportGroupId], references: [id])
+  assigneeId           String?
+  assignee             User?        @relation("AssignedTickets", fields: [assigneeId], references: [id])
+  slaPolicyId          String?
+  slaPolicy            SlaPolicy?   @relation(fields: [slaPolicyId], references: [id])
+  firstResponseDueAt   DateTime?
+  resolutionDueAt      DateTime?
+  firstResponseAt      DateTime?
+  resolvedAt           DateTime?
+  escalatedAt          DateTime?
+  closedAt             DateTime?
+  comments             TicketComment[]
+  auditLogs            AuditLog[]   @relation("TicketAuditLogs")
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  @@index([supportGroupId, status])
+  @@index([assigneeId, status])
+}
+
+model TicketComment {
+  id            String   @id @default(cuid())
+  ticketId      String
+  ticket        Ticket   @relation(fields: [ticketId], references: [id])
+  authorId      String
+  author        User     @relation(fields: [authorId], references: [id])
+  body          String
+  isInternal    Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model SlaPolicy {
+  id                  String   @id @default(cuid())
+  name                String
+  priority            TicketPriority
+  groupId             String
+  group               SupportGroup @relation("GroupPolicies", fields: [groupId], references: [id])
+  defaultForGroup     SupportGroup? @relation("DefaultSlaPolicy")
+  firstResponseMins   Int
+  resolutionMins      Int
+  tickets             Ticket[]
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([groupId, priority])
+}
+
+model AssignmentRule {
+  id                String   @id @default(cuid())
+  name              String
+  groupId           String
+  group             SupportGroup @relation("AssignmentSourceGroup", fields: [groupId], references: [id])
+  category          String?
+  priority          TicketPriority?
+  targetGroupId     String?
+  targetGroup       SupportGroup? @relation("AssignmentTargetGroup", fields: [targetGroupId], references: [id])
+  targetUserId      String?
+  targetUser        User?    @relation("AssignmentTargetUser", fields: [targetUserId], references: [id])
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([groupId, isActive])
+}
+
+model EscalationRule {
+  id                String   @id @default(cuid())
+  name              String
+  groupId           String
+  group             SupportGroup @relation("EscalationSourceGroup", fields: [groupId], references: [id])
+  priority          TicketPriority?
+  afterMins         Int
+  targetGroupId     String?
+  targetGroup       SupportGroup? @relation("EscalationTargetGroup", fields: [targetGroupId], references: [id])
+  targetUserId      String?
+  targetUser        User?    @relation("EscalationTargetUser", fields: [targetUserId], references: [id])
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([groupId, isActive])
+}
+
+model Session {
+  id          String   @id @default(cuid())
+  tokenHash   String   @unique
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  actorId      String?
+  actor        User?    @relation(fields: [actorId], references: [id])
+  entityType   String
+  entityId     String
+  action       String
+  metadata     Json?
+  ticketId     String?
+  ticket       Ticket?  @relation("TicketAuditLogs", fields: [ticketId], references: [id])
+  createdAt    DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([ticketId, createdAt])
+}

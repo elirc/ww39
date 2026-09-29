@@ -1,0 +1,115 @@
+/**
+ * What this file does: owns all Prisma reads and writes for tickets.
+ * What calls it: TicketService, EscalationService, and ticket-related route handlers indirectly.
+ * What it calls: Prisma ticket queries and mutations.
+ * Junior trap: forgetting support-group scoping on list queries and leaking cross-group data.
+ */
+import { TicketPriority, TicketStatus } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
+import type { RepoTicket, TicketRepository, VisibleTicketScope } from "@/repositories/contracts";
+import { buildVisibleTicketWhere } from "@/domain/ticketVisibility";
+
+export class PrismaTicketRepository implements TicketRepository {
+  async create(input: {
+    subject: string;
+    description: string;
+    category: string;
+    priority: TicketPriority;
+    requesterName: string;
+    requesterEmail: string;
+    createdById: string;
+    supportGroupId: string;
+    assigneeId?: string | null;
+    slaPolicyId?: string | null;
+    firstResponseDueAt?: Date | null;
+    resolutionDueAt?: Date | null;
+  }): Promise<RepoTicket> {
+    return prisma.ticket.create({ data: input });
+  }
+
+  async findById(id: string): Promise<RepoTicket | null> {
+    return prisma.ticket.findUnique({ where: { id } });
+  }
+
+  async listVisible(scope: VisibleTicketScope): Promise<RepoTicket[]> {
+    // ⚠️ SENIOR NOTE: every caller relies on this helper to avoid leaking tickets across ownership boundaries.
+    return prisma.ticket.findMany({
+      where: buildVisibleTicketWhere(scope),
+      orderBy: [{ updatedAt: "desc" }, { number: "desc" }]
+    });
+  }
+
+  async updateStatus(input: {
+    ticketId: string;
+    status: TicketStatus;
+    firstResponseAt?: Date | null;
+    resolvedAt?: Date | null;
+    closedAt?: Date | null;
+  }): Promise<RepoTicket> {
+    return prisma.ticket.update({
+      where: { id: input.ticketId },
+      data: {
+        status: input.status,
+        firstResponseAt: input.firstResponseAt,
+        resolvedAt: input.resolvedAt,
+        closedAt: input.closedAt
+      }
+    });
+  }
+
+  async assign(input: { ticketId: string; assigneeId?: string | null; supportGroupId?: string | null }): Promise<RepoTicket> {
+    return prisma.ticket.update({
+      where: { id: input.ticketId },
+      data: {
+        assigneeId: input.assigneeId === undefined ? undefined : input.assigneeId,
+        supportGroupId: input.supportGroupId === undefined ? undefined : input.supportGroupId
+      }
+    });
+  }
+
+  async updateDueDates(input: { ticketId: string; firstResponseDueAt?: Date | null; resolutionDueAt?: Date | null }): Promise<RepoTicket> {
+    return prisma.ticket.update({
+      where: { id: input.ticketId },
+      data: {
+        firstResponseDueAt: input.firstResponseDueAt === undefined ? undefined : input.firstResponseDueAt,
+        resolutionDueAt: input.resolutionDueAt === undefined ? undefined : input.resolutionDueAt
+      }
+    });
+  }
+
+  async markFirstResponse(input: { ticketId: string; firstResponseAt: Date }): Promise<RepoTicket> {
+    // ⚠️ SENIOR NOTE: keep SLA timing writes separate from status writes so comment flows do not fake a lifecycle change.
+    return prisma.ticket.update({
+      where: { id: input.ticketId },
+      data: {
+        firstResponseAt: input.firstResponseAt
+      }
+    });
+  }
+
+  async listOverdueForEscalation(now: Date): Promise<RepoTicket[]> {
+    // ⚠️ SENIOR NOTE: this query intentionally narrows to active work items; closed tickets should never be swept.
+    return prisma.ticket.findMany({
+      where: {
+        status: { in: [TicketStatus.NEW, TicketStatus.OPEN, TicketStatus.PENDING] },
+        OR: [
+          { resolutionDueAt: { lt: now } },
+          { firstResponseDueAt: { lt: now } }
+        ]
+      },
+      orderBy: [{ resolutionDueAt: "asc" }, { firstResponseDueAt: "asc" }]
+    });
+  }
+
+  async markEscalated(input: { ticketId: string; supportGroupId?: string | null; assigneeId?: string | null; escalatedAt: Date }): Promise<RepoTicket> {
+    // ⚠️ SENIOR NOTE: escalation mutates routing and must leave a durable timestamp for audits and ops reporting.
+    return prisma.ticket.update({
+      where: { id: input.ticketId },
+      data: {
+        supportGroupId: input.supportGroupId === undefined ? undefined : input.supportGroupId,
+        assigneeId: input.assigneeId === undefined ? undefined : input.assigneeId,
+        escalatedAt: input.escalatedAt
+      }
+    });
+  }
+}
